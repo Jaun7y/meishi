@@ -1,4 +1,15 @@
 from random import randint
+from tdl.map import Map
+from entity import Entity
+from components.fighter import Fighter
+from components.ai import BasicMonster
+from render_functions import RenderOrder
+
+
+class GameMap(Map):
+    def __init__(self, width, height):
+        super().__init__(width, height)
+        self.explored = [[False for y in range(height)] for x in range(width)]
 
 
 class Rect:
@@ -39,7 +50,30 @@ def create_v_tunnel(game_map, y1, y2, x):
         game_map.transparent[x, y] = True
 
 
-def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_height, player):
+def place_entities(room, entities, max_monsters_per_room, colours):
+    # Get a random number of monsters
+    number_of_monsters = randint(0, max_monsters_per_room)
+    for i in range(number_of_monsters):
+        # Choose a random location in the room
+        x = randint(room.x1 + 1, room.x2 - 1)
+        y = randint(room.y1 + 1, room.y2 - 1)
+
+        if not any([entity for entity in entities if entity.x == x and entity.y == y]):
+            if randint(0, 100) < 80:
+                fighter_component = Fighter(hp=10, defense=0, power=3)
+                ai_component = BasicMonster()
+                monster = Entity(x, y, 'o', colours.get('desaturated_green'), 'Orc', blocks=True,
+                                 render_order=RenderOrder.ACTOR, fighter=fighter_component, ai=ai_component)
+            else:
+                fighter_component = Fighter(hp=16, defense=1, power=4)
+                ai_component = BasicMonster()
+                monster = Entity(x, y, 'T', colours.get('darker_green'), 'Troll', blocks=True,
+                                 render_order=RenderOrder.ACTOR, fighter=fighter_component, ai=ai_component)
+
+            entities.append(monster)
+
+
+def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_height, player, entities, max_monsters_per_room, colours):
     rooms = []
     num_rooms = 0
 
@@ -63,7 +97,7 @@ def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_h
             # Paint it to the maps tiles
             create_room(game_map, new_room)
 
-            # Centre coords of the room will be useful later
+            # Centre coords of the room will be useful later!
             (new_x, new_y) = new_room.center()
 
             if num_rooms == 0:
@@ -85,6 +119,9 @@ def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_h
                     # First move vertically then horizontally
                     create_v_tunnel(game_map, prev_y, new_y, prev_x)
                     create_h_tunnel(game_map, prev_x, new_x, new_y)
+
+
+            place_entities(new_room, entities, max_monsters_per_room, colours)
 
             # Finally append the new room to the list
             rooms.append(new_room)
