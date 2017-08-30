@@ -7,11 +7,14 @@ from components.item import Item
 from render_functions import RenderOrder
 from item_functions import heal, cast_lightning, cast_fireball, cast_confuse
 from game_messages import Message
+from components.stairs import Stairs
 
 class GameMap(Map):
-    def __init__(self, width, height):
+    def __init__(self, width, height, dungeon_level=1):
         super().__init__(width, height)
         self.explored = [[False for y in range(height)] for x in range(width)]
+
+        self.dungeon_level = dungeon_level
 
 
 class Rect:
@@ -65,12 +68,12 @@ def place_entities(room, entities, max_monsters_per_room, max_items_per_room, co
 
         if not any([entity for entity in entities if entity.x == x and entity.y == y]):
             if randint(0, 100) < 80:
-                fighter_component = Fighter(hp=10, defense=0, power=3)
+                fighter_component = Fighter(hp=10, defense=0, power=3, xp=35)
                 ai_component = BasicMonster()
                 monster = Entity(x, y, 'o', colours.get('desaturated_green'), 'Orc', blocks=True,
                                  render_order=RenderOrder.ACTOR, fighter=fighter_component, ai=ai_component)
             else:
-                fighter_component = Fighter(hp=16, defense=1, power=4)
+                fighter_component = Fighter(hp=16, defense=1, power=4, xp=100)
                 ai_component = BasicMonster()
                 monster = Entity(x, y, 'T', colours.get('darker_green'), 'Troll', blocks=True,
                                  render_order=RenderOrder.ACTOR, fighter=fighter_component, ai=ai_component)
@@ -108,6 +111,9 @@ def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_h
     rooms = []
     num_rooms = 0
 
+    centre_of_last_room_x = None
+    centre_of_last_room_y = None
+
     for r in range(max_rooms):
         # Random width and height
         w = randint(room_min_size, room_max_size)
@@ -130,6 +136,9 @@ def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_h
 
             # Centre coords of the room will be useful later!
             (new_x, new_y) = new_room.center()
+
+            centre_of_last_room_x = new_x
+            centre_of_last_room_y = new_y
 
             if num_rooms == 0:
                 # This is the first room, where the player starts at
@@ -156,3 +165,24 @@ def make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_h
             # Finally append the new room to the list
             rooms.append(new_room)
             num_rooms += 1
+
+    stairs_component = Stairs(game_map.dungeon_level + 1)
+    down_stairs = Entity(centre_of_last_room_x, centre_of_last_room_y, '>', (255, 255, 255), 'Stairs',
+                         render_order=RenderOrder.STAIRS, stairs=stairs_component)
+    entities.append(down_stairs)
+
+
+def next_floor(player, message_log, dungeon_level, constants):
+    game_map = GameMap(constants['map_width'], constants['map_height'], dungeon_level)
+    entities = [player]
+
+    make_map(game_map, constants['max_rooms'], constants['room_min_size'], constants['room_max_size'],
+             constants['map_width'], constants['map_height'], player, entities, constants['max_monsters_per_room'],
+             constants['max_items_per_room'], constants['colours'])
+
+    player.fighter.heal(player.fighter.max_hp // 2)
+
+    message_log.add_message(Message('You take a moment to rest and gather your strength',
+                                    constants['colours'].get('light_violet')))
+
+    return game_map, entities

@@ -1,97 +1,37 @@
 import tdl
-from entity import Entity, get_blocking_entities_at_location
+
+from tcod import image_load
+from entity import get_blocking_entities_at_location
 from game_states import GameStates
-from input_handlers import handle_keys, handle_mouse
-from render_functions import render_all, clear_all, RenderOrder
-from map_utils import make_map, GameMap
-from components.fighter import Fighter
-from components.inventory import Inventory
+from input_handlers import handle_keys, handle_mouse, handle_main_menu
+from render_functions import render_all, clear_all
 from death_functions import kill_monster, kill_player
-from game_messages import MessageLog, Message
+from game_messages import Message
+from loader_functions.initialise_new_game import get_constants, get_game_variables
+from loader_functions.data_loaders import load_game, save_game
+from menus import main_menu, message_box
+from map_utils import next_floor
 
 
-def main():
-    screen_width = 80
-    screen_height = 50
-
-    bar_width = 20
-    panel_height = 7
-    panel_y = screen_height - panel_height
-
-    message_x = bar_width + 2
-    message_width = screen_width - bar_width - 2
-    message_height = panel_height - 1
-
-    map_width = 80
-    map_height = 43
-
-    room_max_size = 10
-    room_min_size = 6
-    max_rooms = 30
-
-    fov_algorithm = "BASIC"
-    fov_light_walls = True
-    fov_radius = 10
-
-    max_monsters_per_room = 3
-    max_items_per_room = 10
-
-    colours = {
-        'dark_ground': (208, 70, 72),
-        'dark_wall': (68, 36, 52),
-        'light_wall': (210, 125, 44),
-        'light_ground': (218, 212, 94),
-        'desaturated_green': (63, 127, 63),
-        'darker_green': (0, 127, 0),
-        'dark_red': (191, 0, 0),
-        'white': (255, 255, 255),
-        'black': (0, 0, 0),
-        'red': (255, 0, 0),
-        'orange': (255, 127, 0),
-        'light_red': (255, 114, 114),
-        'darker_red': (127, 0, 0),
-        'violet': (127, 0, 255),
-        'yellow': (255, 255, 0),
-        'blue': (0, 0, 255),
-        'green': (0, 255, 0),
-        'light_cyan': (114, 255, 255),
-        'light_pink': (255, 114, 184)
-    }
-
-    fighter_component = Fighter(hp=30, defense=2, power=5)
-    inventory_component = Inventory(26)
-
-    player = Entity(0, 0, '@', (255, 255, 255), 'Player', blocks=True, render_order=RenderOrder.ACTOR,
-                    fighter=fighter_component, inventory=inventory_component)
-
-    entities = [player]
-
+def play_game(player, entities, game_map, message_log, game_state, root_console, con, panel, constants):
     tdl.set_font('consolas10x10_gs_tc.png', greyscale=True, altLayout=True)
-
-    root_console = tdl.init(screen_width, screen_height, title="Meishi")
-    con = tdl.Console(screen_width, screen_height)
-    panel = tdl.Console(screen_width, panel_height)
-    game_map = GameMap(map_width, map_height)
-    make_map(game_map, max_rooms, room_min_size, room_max_size, map_width, map_height, player, entities,
-             max_monsters_per_room, max_items_per_room, colours)
 
     fov_recompute = True
 
     mouse_coordinates = (0, 0)
 
-    message_log = MessageLog(message_x, message_width, message_height)
-
-    game_state = GameStates.PLAYERS_TURN
     previous_game_state = game_state
 
     targeting_item = None
 
     while not tdl.event.is_window_closed():
         if fov_recompute:
-            game_map.compute_fov(player.x, player.y, fov=fov_algorithm, radius=fov_radius, light_walls=fov_light_walls)
+            game_map.compute_fov(player.x, player.y, fov=constants['fov_algorithm'], radius=constants['fov_radius'], light_walls=constants['fov_light_walls'])
 
-        render_all(con, panel, entities, player, game_map, fov_recompute, root_console, message_log, screen_width,
-                   screen_height, bar_width, panel_height, panel_y, mouse_coordinates, colours, game_state)
+        render_all(con, panel, entities, player, game_map, fov_recompute, root_console, message_log,
+                   constants['screen_width'],constants['screen_height'], constants['bar_width'],
+                   constants['panel_height'], constants['panel_y'], mouse_coordinates, constants['colours'], game_state)
+
         tdl.flush()
         clear_all(con, entities)
         fov_recompute = False
@@ -120,9 +60,13 @@ def main():
 
         move = action.get('move')
         pickup = action.get('pickup')
+        wait = action.get('wait')
         show_inventory = action.get('show_inventory')
         inventory_index = action.get('inventory_index')
         drop_inventory = action.get('drop_inventory')
+        take_stairs = action.get('take_stairs')
+        show_character_screen = action.get('show_character_screen')
+        level_up = action.get('level_up')
         exit = action.get('exit')
         fullscreen = action.get('fullscreen')
 
@@ -150,15 +94,18 @@ def main():
 
                 game_state = GameStates.ENEMY_TURN
 
+        elif wait:
+            game_state = GameStates.ENEMY_TURN
+
         elif pickup and game_state == GameStates.PLAYERS_TURN:
             for entity in entities:
                 if entity.item and entity.x == player.x and entity.y == player.y:
-                    pickup_results = player.inventory.add_item(entity, colours)
+                    pickup_results = player.inventory.add_item(entity, constants['colours'])
                     player_turn_results.extend(pickup_results)
 
                     break
             else:
-                message_log.add_message(Message('There is nothing here to pick up'), colours.get('yellow'))
+                message_log.add_message(Message('There is nothing here to pick up'), constants['colours'].get('yellow'))
 
         if show_inventory:
             previous_game_state = game_state
@@ -172,15 +119,41 @@ def main():
             item = player.inventory.items[inventory_index]
 
             if game_state == GameStates.SHOW_INVENTORY:
-                player_turn_results.extend(player.inventory.use(item, colours, entities=entities, game_map=game_map))
+                player_turn_results.extend(player.inventory.use(item, constants['colours'], entities=entities, game_map=game_map))
             elif game_state == GameStates.DROP_INVENTORY:
-                player_turn_results.extend(player.inventory.drop_item(item, colours))
+                player_turn_results.extend(player.inventory.drop_item(item, constants['colours']))
+
+        if take_stairs and game_state == GameStates.PLAYERS_TURN:
+            for entity in entities:
+                if entity.stairs and entity.x == player.x and entity.y == player.y:
+                    game_map, entities = next_floor(player, message_log, entity.stairs.floor, constants)
+                    fov_recompute = True
+                    con.clear()
+
+                    break
+            else:
+                message_log.add_message(Message('There are no stairs here', constants['colours'].get('yellow')))
+
+        if level_up:
+            if level_up == 'hp':
+                player.fighter.max_hp += 20
+                player.fighter.hp += 20
+            elif level_up == 'str':
+                player.fighter.power += 1
+            elif level_up == 'def':
+                player.fighter.defense += 1
+
+            game_state = previous_game_state
+
+        if show_character_screen:
+            previous_game_state = game_state
+            game_state = GameStates.CHARACTER_SCREEN
 
         if game_state == GameStates.TARGETING:
             if left_click:
                 target_x, target_y = left_click
 
-                item_use_results = player.inventory.use(targeting_item, colours, entities=entities, game_map=game_map,
+                item_use_results = player.inventory.use(targeting_item, constants['colours'], entities=entities, game_map=game_map,
                                                         target_x=target_x, target_y=target_y)
                 player_turn_results.extend(item_use_results)
 
@@ -188,12 +161,12 @@ def main():
                 player_turn_results.append({'targeting_cancelled': True})
 
         if exit:
-            if game_state in (GameStates.SHOW_INVENTORY, GameStates.DROP_INVENTORY):
+            if game_state in (GameStates.SHOW_INVENTORY, GameStates.DROP_INVENTORY, GameStates.CHARACTER_SCREEN):
                 game_state = previous_game_state
             elif game_state == GameStates.TARGETING:
                 player_turn_results.append({'targeting_cancelled': True})
             else:
-                return True
+                save_game(player, entities, game_map, message_log, game_state)
 
         if fullscreen:
             tdl.set_fullscreen(not tdl.get_fullscreen())
@@ -206,6 +179,7 @@ def main():
             item_dropped = player_turn_result.get('item_dropped')
             targeting = player_turn_result.get('targeting')
             targeting_cancelled = player_turn_result.get('targeting_cancelled')
+            xp = player_turn_result.get('xp')
 
             if message:
                 message_log.add_message(message)
@@ -214,11 +188,22 @@ def main():
                 game_state = previous_game_state
                 message_log.add_message(Message('Targeting Cancelled'))
 
+            if xp:
+                leveled_up = player.level.add_xp(xp)
+                message_log.add_message(Message('You gain {0} experience points'.format(xp)))
+
+                if leveled_up:
+                    message_log.add_message(Message('Your culinary skills grow stronger! You have reached level {0}'.format(player.level.current_level), constants['colours'].get('yellow')))
+                    previous_game_state = game_state
+                    game_state = GameStates.LEVEL_UP
+
+
+
             if dead_entity:
                 if dead_entity == player:
-                    message, game_state = kill_player(dead_entity, colours)
+                    message, game_state = kill_player(dead_entity, constants['colours'])
                 else:
-                    message = kill_monster(dead_entity, colours)
+                    message = kill_monster(dead_entity, constants['colours'])
 
                 message_log.add_message(message)
 
@@ -256,9 +241,9 @@ def main():
 
                         if dead_entity:
                             if dead_entity == player:
-                                message, game_state = kill_player(dead_entity, colours)
+                                message, game_state = kill_player(dead_entity, constants['colours'])
                             else:
-                                message = kill_monster(dead_entity, colours)
+                                message = kill_monster(dead_entity, constants['colours'])
 
                             message_log.add_message(message)
 
@@ -269,6 +254,72 @@ def main():
                         break
             else:
                 game_state = GameStates.PLAYERS_TURN
+
+
+def main():
+    constants = get_constants()
+
+    tdl.set_font('consolas10x10_gs_tc.png', greyscale=True, altLayout=True)
+
+    root_console = tdl.init(constants['screen_width'], constants['screen_height'], title="Meishi")
+    con = tdl.Console(constants['screen_width'], constants['screen_height'])
+    panel = tdl.Console(constants['screen_width'], constants['panel_height'])
+
+    player = None
+    entities = []
+    game_map = None
+    message_log = None
+    game_state = None
+
+    show_main_menu = True
+    show_load_error_message = False
+
+    main_menu_background_image = image_load('menu_background1.png')
+
+    while not tdl.event.is_window_closed():
+        for event in tdl.event.get():
+            if event.type == 'KEYDOWN':
+                user_input = event
+                break
+        else:
+            user_input = None
+
+        if show_main_menu:
+            main_menu(con, root_console, main_menu_background_image, constants['screen_width'],
+                      constants['screen_height'], constants['colours'])
+
+            tdl.flush()
+
+            action = handle_main_menu(user_input)
+
+            new_game = action.get('new_game')
+            load_saved_game = action.get('load_game')
+            exit_game = action.get('exit')
+
+            if show_load_error_message and (new_game or load_saved_game or exit_game):
+                show_load_error_message = False
+            elif new_game:
+                player, entities, game_map, message_log, game_state = get_game_variables(constants)
+                game_state = GameStates.PLAYERS_TURN
+
+                show_main_menu = False
+            elif load_saved_game:
+                try:
+                    player, entities, game_map, message_log, game_state = load_saved_game()
+                    show_main_menu = False
+                except FileNotFoundError:
+                    show_load_error_message = True
+            elif exit_game:
+                break
+
+        else:
+            root_console.clear()
+            con.clear()
+            panel.clear()
+            play_game(player, entities, game_map, message_log, game_state, root_console, con, panel, constants)
+
+            show_main_menu = True
+
 
 if __name__ == '__main__':
     main()
